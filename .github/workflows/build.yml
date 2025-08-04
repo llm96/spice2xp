@@ -1,0 +1,67 @@
+name: Build (Windows XP)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_DIR: "${{ github.workspace }}/.ccache"
+
+    steps:
+      - name: Checkout downstream repository
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: 'spice2x'
+          repository: 'spice2x/spice2x.github.io'
+
+      - name: Apply build fixes for Windows XP
+        run: git apply "${{ github.workspace }}/0001-Build-fixes-for-Windows-XP.patch"
+        working-directory: spice2x
+        shell: pwsh
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          install: mingw-w64-i686-ninja mingw-w64-i686-toolchain mingw-w64-i686-cmake mingw-w64-i686-ccache git
+
+      - name: Configure CMake
+        working-directory: spice2x/src/spice2x
+        run: |
+          cmake -S . -B build/ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0501 \
+            -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0501
+
+      - name: Build with CMake
+        working-directory: spice2x/src/spice2x
+        run: |
+          cmake --build build/ --target spicetools_cfg
+          cmake --build build/ --target spicetools_spice
+
+      - name: Show ccache statistics
+        run: ccache -s
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spice2x-xp-build
+          path: |
+            spice2x/src/spice2x/build/spicetools/spicecfg.exe
+            spice2x/src/spice2x/build/spicetools/32/spice.exe

@@ -1,0 +1,194 @@
+From 040f4dcf74144135ada8ccfc3dc64047ab1d91f7 Mon Sep 17 00:00:00 2001
+From: llm96 <llm96@fervidex.net>
+Date: Mon, 4 Aug 2025 13:45:38 +0100
+Subject: [PATCH] Build fixes for Windows XP
+
+---
+ src/spice2x/games/iidx/iidx.cpp              | 2 +-
+ src/spice2x/games/nost/nost.cpp              | 3 +++
+ src/spice2x/hooks/winuser.cpp                | 8 +++++++-
+ src/spice2x/misc/wintouchemu.cpp             | 3 +++
+ src/spice2x/overlay/windows/card_manager.cpp | 6 ++++--
+ src/spice2x/overlay/windows/config.cpp       | 3 ++-
+ src/spice2x/touch/touch.cpp                  | 3 +++
+ src/spice2x/touch/touch_indicators.cpp       | 3 +++
+ src/spice2x/touch/win7.cpp                   | 3 +++
+ src/spice2x/touch/win8.cpp                   | 3 +++
+ src/spice2x/util/cpuutils.cpp                | 8 ++++++++
+ 11 files changed, 40 insertions(+), 5 deletions(-)
+
+diff --git a/src/spice2x/games/iidx/iidx.cpp b/src/spice2x/games/iidx/iidx.cpp
+index e91f942..d9c4fd3 100644
+--- a/src/spice2x/games/iidx/iidx.cpp
++++ b/src/spice2x/games/iidx/iidx.cpp
+@@ -740,7 +740,7 @@ namespace games::iidx {
+     }
+ 
+     bool is_tdj_fhd() {
+-        return TDJ_MODE && avs::game::is_ext(2022101900, MAXINT);
++        return TDJ_MODE && avs::game::is_ext(2022101900, std::numeric_limits<int>::max());
+     }
+ 
+     void apply_audio_hacks() {
+diff --git a/src/spice2x/games/nost/nost.cpp b/src/spice2x/games/nost/nost.cpp
+index 0c87558..31669fa 100644
+--- a/src/spice2x/games/nost/nost.cpp
++++ b/src/spice2x/games/nost/nost.cpp
+@@ -1,5 +1,8 @@
+ // enable touch functions - set version to windows 7
+ // mingw otherwise doesn't load touch stuff
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
+ #define _WIN32_WINNT 0x0601
+ 
+ #include "nost.h"
+diff --git a/src/spice2x/hooks/winuser.cpp b/src/spice2x/hooks/winuser.cpp
+index 830bc6a..09678b2 100644
+--- a/src/spice2x/hooks/winuser.cpp
++++ b/src/spice2x/hooks/winuser.cpp
+@@ -5,6 +5,7 @@
+ 
+ // hooks to prevent display scaling changes (e.g., SDVX)
+ 
++#if _WIN32_WINNT >= _WIN32_WINNT_VISTA
+ static decltype(DisplayConfigSetDeviceInfo) *DisplayConfigSetDeviceInfo_real = nullptr;
+ 
+ static LONG WINAPI DisplayConfigSetDeviceInfo_hook(DISPLAYCONFIG_DEVICE_INFO_HEADER *setPacket) {
+@@ -15,9 +16,14 @@ static LONG WINAPI DisplayConfigSetDeviceInfo_hook(DISPLAYCONFIG_DEVICE_INFO_HEA
+     }
+     return DisplayConfigSetDeviceInfo_real(setPacket);
+ }
++#endif
+ 
+ void winuser_hook_init(HMODULE module) {
++#if _WIN32_WINNT >= _WIN32_WINNT_VISTA
+     log_info("winuser", "initializing");
+     DisplayConfigSetDeviceInfo_real =
+         detour::iat_try("DisplayConfigSetDeviceInfo", DisplayConfigSetDeviceInfo_hook, module);
+-}
++#else
++    log_warning("winuser", "unsupported OS");
++#endif
++}
+\ No newline at end of file
+diff --git a/src/spice2x/misc/wintouchemu.cpp b/src/spice2x/misc/wintouchemu.cpp
+index ce91830..a72d915 100644
+--- a/src/spice2x/misc/wintouchemu.cpp
++++ b/src/spice2x/misc/wintouchemu.cpp
+@@ -1,5 +1,8 @@
+ // enable touch functions - set version to windows 7
+ // mingw otherwise doesn't load touch stuff
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
+ #define _WIN32_WINNT 0x0601
+ 
+ #include "wintouchemu.h"
+diff --git a/src/spice2x/overlay/windows/card_manager.cpp b/src/spice2x/overlay/windows/card_manager.cpp
+index dd22c03..acdf987 100644
+--- a/src/spice2x/overlay/windows/card_manager.cpp
++++ b/src/spice2x/overlay/windows/card_manager.cpp
+@@ -153,8 +153,10 @@ namespace overlay::windows {
+     void CardManager::open_card_editor() {
+         if (this->current_card) {
+             const auto card = this->current_card;
+-            strcpy_s(this->name_buffer, std::size(this->name_buffer), card->name.c_str());
+-            strcpy_s(this->card_buffer, std::size(this->card_buffer), card->id.c_str());
++            const auto name_length = card->name.copy(this->name_buffer, sizeof(this->name_buffer) - 1);
++            const auto card_id_length = card->id.copy(this->card_buffer, sizeof(this->card_buffer) - 1);
++            this->name_buffer[name_length] = '\0';
++            this->card_buffer[card_id_length] = '\0';
+             this->color_buffer[0] = card->color[0];
+             this->color_buffer[1] = card->color[1];
+             this->color_buffer[2] = card->color[2];
+diff --git a/src/spice2x/overlay/windows/config.cpp b/src/spice2x/overlay/windows/config.cpp
+index 78c88d5..fd7cd53 100644
+--- a/src/spice2x/overlay/windows/config.cpp
++++ b/src/spice2x/overlay/windows/config.cpp
+@@ -2492,7 +2492,8 @@ namespace overlay::windows {
+                 // don't know why this file insists on using 18 chars to store the card ID
+                 char new_card[17];
+                 generate_ea_card(new_card);
+-                strcpy_s(this->keypads_card_number[player], new_card);
++                auto& dst = this->keypads_card_number[player];
++                dst[std::string_view(new_card).copy(dst, std::size(dst) - 1)] = '\0';
+                 write_card(player);
+                 read_card(1 - player);
+             }
+diff --git a/src/spice2x/touch/touch.cpp b/src/spice2x/touch/touch.cpp
+index 13f4172..9ecc20f 100644
+--- a/src/spice2x/touch/touch.cpp
++++ b/src/spice2x/touch/touch.cpp
+@@ -1,6 +1,9 @@
+ 
+ // enable touch functions - set version to windows 7
+ // mingw otherwise doesn't load touch stuff
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
+ #define _WIN32_WINNT 0x0601
+ 
+ #include <thread>
+diff --git a/src/spice2x/touch/touch_indicators.cpp b/src/spice2x/touch/touch_indicators.cpp
+index 44e84df..cf3ee5d 100644
+--- a/src/spice2x/touch/touch_indicators.cpp
++++ b/src/spice2x/touch/touch_indicators.cpp
+@@ -1,5 +1,8 @@
+ 
+ // set version to Windows 8 to enable Windows 8 touch functions
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
+ #define _WIN32_WINNT 0x0602
+ 
+ #include "touch_indicators.h"
+diff --git a/src/spice2x/touch/win7.cpp b/src/spice2x/touch/win7.cpp
+index f444a39..ff1deab 100644
+--- a/src/spice2x/touch/win7.cpp
++++ b/src/spice2x/touch/win7.cpp
+@@ -1,6 +1,9 @@
+ 
+ // enable touch functions - set version to windows 7
+ // mingw otherwise doesn't load touch stuff
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
+ #define _WIN32_WINNT 0x0601
+ 
+ #include <thread>
+diff --git a/src/spice2x/touch/win8.cpp b/src/spice2x/touch/win8.cpp
+index 3b0bd71..08e47ab 100644
+--- a/src/spice2x/touch/win8.cpp
++++ b/src/spice2x/touch/win8.cpp
+@@ -1,5 +1,8 @@
+ 
+ // set version to Windows 8 to enable Windows 8 touch functions
++#ifdef _WIN32_WINNT
++#undef _WIN32_WINNT
++#endif
+ #define _WIN32_WINNT 0x0602
+ 
+ #include <thread>
+diff --git a/src/spice2x/util/cpuutils.cpp b/src/spice2x/util/cpuutils.cpp
+index 1a783da..96e5e74 100644
+--- a/src/spice2x/util/cpuutils.cpp
++++ b/src/spice2x/util/cpuutils.cpp
+@@ -26,6 +26,14 @@ typedef struct _PROCESSOR_RELATIONSHIP_WIN10 {
+     GROUP_AFFINITY GroupMask[ANYSIZE_ARRAY];
+ } PROCESSOR_RELATIONSHIP_WIN10, *PPROCESSOR_RELATIONSHIP_WIN10;
+ 
++#if _WIN32_WINNT < _WIN32_WINNT_WIN7
++typedef struct _PROCESSOR_NUMBER {
++    WORD Group;
++    BYTE Number;
++    BYTE Reserved;
++} PROCESSOR_NUMBER, *PPROCESSOR_NUMBER;
++#endif
++
+ /*
+ #ifndef NT_SUCCESS
+ #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+-- 
+2.49.0.windows.1
+
